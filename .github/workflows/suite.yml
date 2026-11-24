@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: Suite
+
+# A pull request or a push builds the adapter and runs a few tests from each area of the suite, at
+# the suite commit the locked brep-protocol release was published from. Each week, and on demand,
+# it runs the whole suite at the suite's main branch, which shows when to take a newer release. Times on these shared machines are not
+# comparable; this checks that the adapter drives its kernel, and the results are only that.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SMOKE: booleans/overlap/boxes,constructions/rejects-cone-with-no-radius,fillets/hole-rim,chamfers/prism-side-edges,modify/rejects-shell-as-thick-as-the-part,queries/display-of-a-box,step/read-ap203,parts/brackets/clevis
+
+jobs:
+  suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          path: adapter
+      - name: Check out the suite
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+              schedule | workflow_dispatch) ref=main ;;
+              *)
+                  manifest="$(cargo metadata --locked --format-version 1 \
+                      --manifest-path adapter/Cargo.toml | jq -r '.packages[]
+                      | select(.name == "brep-protocol" and (.source // "" | startswith("registry+")))
+                      | .manifest_path')"
+                  ref="$(jq -r .git.sha1 "$(dirname "$manifest")/.cargo_vcs_info.json")"
+                  ;;
+          esac
+          git clone -q https://github.com/springcraft-ai/brep-conformance.git suite
+          git -C suite checkout -q "$ref"
+          echo "Suite at $(git -C suite rev-parse --short HEAD) ($ref)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            adapter -> target
+            suite -> target
+      - name: Build
+        run: |
+          (cd suite && cargo build --release --locked -p brep-conformance)
+          (cd adapter && cargo build --release --locked)
+          echo "ADAPTER=$PWD/adapter/target/release/solidcraft-adapter" >> "$GITHUB_ENV"
+      - name: Run the suite
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+              schedule | workflow_dispatch) tests=() ;;
+              *) tests=(--family "$SMOKE") ;;
+          esac
+          suite/target/release/brep-conformance --adapter "$ADAPTER" --threads 4 \
+              --out results.json "${tests[@]}" > summary.txt
+          {
+              echo '```'
+              cat summary.txt
+              echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Every outcome is a result, a crash included: the kernel runs in the adapter's process, so a
+      # kernel that panics looks the same as an adapter that does. The job fails only when the build
+      # fails or the run does not finish.
+      - name: Outcomes
+        run: |
+          python3 -I - results.json <<'EOF'
+          import collections, json, sys
+          cases = json.load(open(sys.argv[1]))["cases"]
+          counts = collections.Counter(c["result"] for c in cases)
+          print(len(cases), "cases:", dict(counts))
+          EOF
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: results
+          path: |
+            results.json
+            summary.txt
+          if-no-files-found: ignore

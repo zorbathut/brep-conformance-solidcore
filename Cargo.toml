@@ -1,0 +1,13 @@
+[package]
+name = "solidcraft-adapter"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "The SolidCraft adapter for the B-rep protocol the conformance suite drives: SolidCraft's solidcore kernel"
+publish = false
+
+[dependencies]
+brep-protocol = "2"
+# https://github.com/tangency-labs/solidcraft/releases/tag/v0.47.0, with `VERSION` in src/main.rs:
+# the solidcore kernel as SolidCraft ships it, in its solidcore/ folder.
+solidcore = { git = "https://github.com/tangency-labs/solidcraft", rev = "56d2ede6f36621ff4e369b7bd5b2c64a6d42d63c" }
